@@ -22,7 +22,7 @@ from finance_common import (
     compute_monthly_forecast, compute_annual_forecast, group_ap_by_due_date,
 )
 from shopify_revenue import fetch_orders, aggregate_revenue, month_key
-from render import shell, dashboard_body, monthly_body, annual_body, ap_body
+from render import shell, dashboard_body, monthly_body, annual_body, ap_body, receipt_dropzone_html
 import sync_sheet
 import sheet_write
 import drive_receipts
@@ -349,7 +349,7 @@ def edit(txn_id):
         <label>Payment method <select name="payment_method">{pm_options}</select></label>
         <label>Or add new method <input type="text" name="new_payment_method" placeholder="e.g. Amex ...1234"></label>
         <label>Transaction # <input type="text" name="reference_number" value="{existing['reference_number'] or ''}"></label>
-        <label>Replace receipt <input type="file" name="receipt_file" accept="image/*,.pdf"></label>
+        <label>Replace receipt {receipt_dropzone_html()}</label>
         <label style="flex-direction:row; align-items:center; gap:6px;"><input type="checkbox" name="unpaid" value="1" {unpaid_checked} onchange="document.getElementById('due-date-field').style.display=this.checked?'flex':'none'" style="width:auto;"> Unpaid</label>
         <label id="due-date-field" style="display:{due_display};">Due date <input type="date" name="due_date" value="{existing['due_date'] or ''}"></label>
         <button type="submit" class="fd-btn">Save</button>

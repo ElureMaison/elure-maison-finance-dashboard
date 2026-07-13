@@ -114,6 +114,10 @@ table.fd-table tr.fd-overdue td { color: var(--critical); }
 .fd-form-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); min-width: 0; }
 .fd-form-row input, .fd-form-row select { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); font-family: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
 .fd-actions-cell { display: flex; gap: 6px; }
+.fd-dropzone { border: 2px dashed var(--border); border-radius: 6px; padding: 8px 10px; text-align: center; font-size: 12px; color: var(--text-secondary); cursor: pointer; min-height: 21px; display: flex; align-items: center; justify-content: center; transition: border-color 0.15s, background 0.15s; }
+.fd-dropzone.fd-drag-over { border-color: var(--series-revenue); background: var(--page); color: var(--text-primary); }
+.fd-dropzone.fd-has-file { border-style: solid; color: var(--text-primary); }
+.fd-dropzone:focus-visible { outline: 2px solid var(--series-revenue); outline-offset: 2px; }
 """
 
 GATE_CSS = """
@@ -131,6 +135,57 @@ NAV_TABS = [
     ("annual", "Annual P&L"),
     ("ap", "Accounts Payable"),
 ]
+
+# Wires up every .fd-dropzone on the page - drag-and-drop, click-to-browse,
+# and paste (Ctrl+V) all set the same hidden file input. No-op if a page
+# has no dropzone. Shared by the Add and Edit forms so both behave the same.
+DROPZONE_INIT_JS = """
+document.querySelectorAll(".fd-dropzone").forEach(zone => {
+  const input = zone.querySelector("input[type=file]");
+  const label = zone.querySelector(".fd-dropzone-label");
+  const defaultLabel = label.textContent;
+
+  function showFile(file) {
+    label.textContent = file ? file.name : defaultLabel;
+    zone.classList.toggle("fd-has-file", !!file);
+  }
+
+  zone.addEventListener("click", () => input.click());
+  zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("fd-drag-over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("fd-drag-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("fd-drag-over");
+    if (e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      showFile(e.dataTransfer.files[0]);
+    }
+  });
+  input.addEventListener("change", () => showFile(input.files[0]));
+  zone.addEventListener("paste", (e) => {
+    const items = (e.clipboardData || window.clipboardData).items;
+    for (const item of items) {
+      if (item.type.indexOf("image") !== -1) {
+        const file = item.getAsFile();
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        showFile(file);
+        e.preventDefault();
+        break;
+      }
+    }
+  });
+});
+"""
+
+
+def receipt_dropzone_html(name="receipt_file", note=""):
+    return f"""<div class="fd-dropzone" tabindex="0">
+      <input type="file" name="{name}" accept="image/*,.pdf" style="display:none;">
+      <span class="fd-dropzone-label">Drop photo, click to browse, or paste</span>
+    </div>{note}"""
 
 
 def fmt_currency_py(n):
@@ -220,6 +275,7 @@ if (sessionStorage.getItem("fd-unlocked") === "1") {{
 </div>
 <script>
 {gate_unlock_js}
+{DROPZONE_INIT_JS}
 </script>
 </body>
 </html>"""
@@ -264,7 +320,7 @@ def dashboard_body(data, editable=False):
         <label>Payment method <select name="payment_method">{{PAYMENT_METHOD_OPTIONS}}</select></label>
         <label>Or add new method <input type="text" name="new_payment_method" placeholder="e.g. Amex ...1234"></label>
         <label>Transaction # <input type="text" name="reference_number" placeholder="auto-detected from receipt if left blank"></label>
-        <label>Receipt <input type="file" name="receipt_file" accept="image/*,.pdf"></label>
+        <label>Receipt {receipt_dropzone_html()}</label>
         <label style="flex-direction:row; align-items:center; gap:6px;"><input type="checkbox" name="unpaid" value="1" onchange="document.getElementById('due-date-field').style.display=this.checked?'flex':'none'" style="width:auto;"> Unpaid</label>
         <label id="due-date-field" style="display:none;">Due date <input type="date" name="due_date"></label>
         <button type="submit" class="fd-btn">Add</button>
