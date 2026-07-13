@@ -22,10 +22,10 @@ def append_row(txn):
     creds = get_creds()
     sheets = build("sheets", "v4", credentials=creds)
     result = sheets.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID, range="Expenses!A2", valueInputOption="USER_ENTERED",
+        spreadsheetId=SHEET_ID, range="Finance!A2", valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS", body={"values": [_row_values(txn)]},
     ).execute()
-    # Extract the row number Sheets actually wrote to, e.g. "Expenses!A15:K15"
+    # Extract the row number Sheets actually wrote to, e.g. "Finance!A15:K15"
     updated_range = result["updates"]["updatedRange"]
     row_num = int(updated_range.split("!")[1].split(":")[0][1:])
     return row_num
@@ -35,7 +35,7 @@ def update_row(sheet_row, txn):
     creds = get_creds()
     sheets = build("sheets", "v4", credentials=creds)
     sheets.spreadsheets().values().update(
-        spreadsheetId=SHEET_ID, range=f"Expenses!A{sheet_row}:N{sheet_row}", valueInputOption="USER_ENTERED",
+        spreadsheetId=SHEET_ID, range=f"Finance!A{sheet_row}:N{sheet_row}", valueInputOption="USER_ENTERED",
         body={"values": [_row_values(txn)]},
     ).execute()
 
@@ -44,5 +44,5 @@ def clear_row(sheet_row):
     creds = get_creds()
     sheets = build("sheets", "v4", credentials=creds)
     sheets.spreadsheets().values().clear(
-        spreadsheetId=SHEET_ID, range=f"Expenses!A{sheet_row}:N{sheet_row}",
+        spreadsheetId=SHEET_ID, range=f"Finance!A{sheet_row}:N{sheet_row}",
     ).execute()

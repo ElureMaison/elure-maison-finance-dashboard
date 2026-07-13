@@ -28,6 +28,8 @@ import sheet_write
 import drive_receipts
 import ocr_receipt
 import fx_convert
+from google_auth import get_creds
+from sheet_summary import push_summary
 from init_db import init_db, DB_FILE
 from local_config import SHOPIFY_TOKEN
 
@@ -154,6 +156,13 @@ def build_finance_data(include_shopify=True):
 
     monthly_forecast = compute_monthly_forecast(series, forecast_months=FORECAST_MONTHS, growth_pct=0.0)
     annual = compute_annual_forecast(series, monthly_forecast)
+    ytd = {"revenue": round(ytd_revenue, 2), "expenses": round(ytd_expenses, 2), "profit": round(ytd_revenue - ytd_expenses, 2)}
+
+    if include_shopify:
+        try:
+            push_summary(get_creds(), series, mtd, ytd, total_ap)
+        except Exception as e:
+            print(f"Summary tab push failed ({e}) - dashboard still loads fine, just not reflected in the Sheet this time")
 
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -162,7 +171,7 @@ def build_finance_data(include_shopify=True):
         "monthly_forecast": monthly_forecast,
         "annual": annual,
         "mtd": mtd,
-        "ytd": {"revenue": round(ytd_revenue, 2), "expenses": round(ytd_expenses, 2), "profit": round(ytd_revenue - ytd_expenses, 2)},
+        "ytd": ytd,
         "current_month_expense_breakdown": [
             {"category": k, "amount": round(v, 2)} for k, v in sorted(category_totals_current_month.items(), key=lambda x: -x[1])
         ],

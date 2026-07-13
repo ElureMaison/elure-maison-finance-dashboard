@@ -21,7 +21,7 @@ def parse_amount(raw):
 def sync():
     creds = get_creds()
     sheets = build("sheets", "v4", credentials=creds)
-    resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="Expenses!A2:N1000").execute()
+    resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="Finance!A2:N1000").execute()
     rows = resp.get("values", [])
 
     conn = sqlite3.connect(DB_FILE)

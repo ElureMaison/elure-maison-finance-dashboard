@@ -2,10 +2,12 @@
 sync_finance_dashboard.py
 
 CI version - pulls last 13 months of paid Shopify orders + all expense rows
-from the "Elure Maison - Expenses" Google Sheet, aggregates both by month,
-computes Monthly/Annual P&L forecasts and open Accounts Payable, and writes
-finance_data.json. Auth is entirely via environment variables (GitHub
-Actions secrets) - no local token files, no interactive login.
+from the "Elure Maison - Finance" Google Sheet, aggregates both by month,
+computes Monthly/Annual P&L forecasts and open Accounts Payable, writes
+finance_data.json, and pushes a computed Revenue/Expenses/Profit summary
+back into the Sheet's "Summary" tab. Auth is entirely via environment
+variables (GitHub Actions secrets) - no local token files, no interactive
+login.
 
 Required env vars:
   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
@@ -27,6 +29,7 @@ from finance_common import (
     compute_monthly_forecast, compute_annual_forecast, group_ap_by_due_date,
 )
 from shopify_revenue import fetch_orders, aggregate_revenue, month_key
+from sheet_summary import push_summary
 
 EXPENSE_SHEET_ID = os.environ.get("EXPENSE_SHEET_ID", "1Aa_Z6hd854sHRkKhkvFHvDrMAmuR09DtCm-51fjvdug")
 MONTHS_BACK = 13  # 12 full months + current partial month
@@ -46,10 +49,9 @@ def get_sheets_creds():
     return creds
 
 
-def fetch_expenses():
-    creds = get_sheets_creds()
+def fetch_expenses(creds):
     sheets = build("sheets", "v4", credentials=creds)
-    resp = sheets.spreadsheets().values().get(spreadsheetId=EXPENSE_SHEET_ID, range="Expenses!A2:N1000").execute()
+    resp = sheets.spreadsheets().values().get(spreadsheetId=EXPENSE_SHEET_ID, range="Finance!A2:N1000").execute()
     rows = resp.get("values", [])
 
     expenses = []
@@ -93,8 +95,10 @@ def fetch_expenses():
 
 
 def main():
+    creds = get_sheets_creds()
+
     print("Fetching expenses from Google Sheet...")
-    expenses = fetch_expenses()
+    expenses = fetch_expenses(creds)
     print(f"  {len(expenses)} expense rows")
 
     print("Fetching Shopify orders...")
@@ -166,6 +170,9 @@ def main():
     print("Wrote finance_data.json")
     print(f"MTD revenue: ${mtd['revenue']:,.2f}  MTD expenses: ${mtd['expenses']:,.2f}  MTD profit: ${mtd['profit']:,.2f}")
     print(f"Open AP: ${total_ap:,.2f} across {len(open_ap)} items")
+
+    push_summary(creds, series, mtd, snapshot["ytd"], total_ap)
+    print("Pushed Summary tab (Revenue/Expenses/Profit) to the Sheet")
 
 
 if __name__ == "__main__":
