@@ -41,6 +41,7 @@ CATEGORIES = [
     "Packaging",
     "Fees (Shopify, payment processing)",
     "Sourcing / Sampling",
+    "Legal / Business Registration",
     "Other",
 ]
 
