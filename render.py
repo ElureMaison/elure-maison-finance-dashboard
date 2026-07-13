@@ -194,6 +194,18 @@ def fmt_currency_py(n):
     return f"{sign}${n:,.2f}"
 
 
+def fmt_expense_py(n):
+    return f'<span class="fd-down">-{fmt_currency_py(abs(n))}</span>'
+
+
+def fmt_profit_py(n):
+    if n > 0:
+        return f'<span class="fd-up">+{fmt_currency_py(n)}</span>'
+    if n < 0:
+        return f'<span class="fd-down">{fmt_currency_py(n)}</span>'
+    return f'<span style="color:var(--text-muted);">{fmt_currency_py(n)}</span>'
+
+
 def nav_html(active_tab, nav_urls):
     links = "".join(
         f'<a href="{nav_urls[key]}" class="{"active" if key == active_tab else ""}">{label}</a>'
@@ -286,9 +298,9 @@ def kpi_tiles_html(data):
     margin = (mtd["profit"] / mtd["revenue"] * 100) if mtd["revenue"] else 0.0
     tiles = [
         ("Revenue (MTD)", fmt_currency_py(mtd["revenue"]), f'{mtd["orders"]} orders', None),
-        ("Expenses (MTD)", fmt_currency_py(mtd["expenses"]), "", None),
-        ("Profit (MTD)", fmt_currency_py(mtd["profit"]), "", mtd["profit"] >= 0),
-        ("Margin (MTD)", f'{margin:.1f}%', f'YTD profit {fmt_currency_py(ytd["profit"])}', margin >= 0),
+        ("Expenses (MTD)", fmt_expense_py(mtd["expenses"]), "", None),
+        ("Profit (MTD)", fmt_profit_py(mtd["profit"]), "", None),
+        ("Margin (MTD)", f'{margin:.1f}%', f'YTD profit {fmt_profit_py(ytd["profit"])}', margin >= 0),
         ("Open Accounts Payable", fmt_currency_py(data.get("total_ap", 0)), f'{sum(g["count"] for g in data.get("ap_groups", []))} items', data.get("total_ap", 0) == 0),
     ]
     html = '<div class="fd-kpis">'
@@ -387,6 +399,14 @@ function fmtCurrency(n, compact) {{
   if (compact && abs >= 100000) return sign + "$" + (abs/1000).toFixed(0) + "K";
   return sign + "$" + abs.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
 }}
+function fmtExpense(n, compact) {{
+  return `<span class="fd-down">-${{fmtCurrency(Math.abs(n), compact)}}</span>`;
+}}
+function fmtProfit(n, compact) {{
+  if (n > 0) return `<span class="fd-up">+${{fmtCurrency(n, compact)}}</span>`;
+  if (n < 0) return `<span class="fd-down">${{fmtCurrency(n, compact)}}</span>`;
+  return `<span style="color:var(--text-muted);">${{fmtCurrency(n, compact)}}</span>`;
+}}
 function fmtMonth(m) {{
   const [y, mo] = m.split("-");
   const d = new Date(parseInt(y), parseInt(mo)-1, 1);
@@ -428,7 +448,7 @@ function fmtMonth(m) {{
   svg += `<circle cx="${{x(last)}}" cy="${{y(months[last].revenue)}}" r="4" fill="var(--series-revenue)" stroke="var(--surface-1)" stroke-width="2"/>`;
   svg += `<circle cx="${{x(last)}}" cy="${{y(months[last].expenses)}}" r="4" fill="var(--series-expense)" stroke="var(--surface-1)" stroke-width="2"/>`;
   svg += `<text x="${{x(last)+8}}" y="${{y(months[last].revenue)+4}}" font-size="11" fill="var(--series-revenue)" font-weight="600">${{fmtCurrency(months[last].revenue, true)}}</text>`;
-  svg += `<text x="${{x(last)+8}}" y="${{y(months[last].expenses)+4}}" font-size="11" fill="var(--series-expense)" font-weight="600">${{fmtCurrency(months[last].expenses, true)}}</text>`;
+  svg += `<text x="${{x(last)+8}}" y="${{y(months[last].expenses)+4}}" font-size="11" fill="var(--series-expense)" font-weight="600">${{fmtCurrency(-months[last].expenses, true)}}</text>`;
   months.forEach((m, i) => {{ svg += `<circle data-i="${{i}}" cx="${{x(i)}}" cy="${{y(m.revenue)}}" r="9" fill="transparent" class="fd-hit"/>`; }});
   svg += `</svg>`;
   host.innerHTML = svg;
@@ -440,8 +460,8 @@ function fmtMonth(m) {{
       const i = +el.getAttribute("data-i"); const m = months[i];
       tip.innerHTML = `<div style="font-weight:600; margin-bottom:4px;">${{fmtMonth(m.month)}}</div>
         <div class="fd-tooltip-row"><span>Revenue</span><span>&nbsp;${{fmtCurrency(m.revenue)}}</span></div>
-        <div class="fd-tooltip-row"><span>Expenses</span><span>&nbsp;${{fmtCurrency(m.expenses)}}</span></div>
-        <div class="fd-tooltip-row"><span>Profit</span><span>&nbsp;${{fmtCurrency(m.profit)}}</span></div>`;
+        <div class="fd-tooltip-row"><span>Expenses</span><span>&nbsp;${{fmtExpense(m.expenses)}}</span></div>
+        <div class="fd-tooltip-row"><span>Profit</span><span>&nbsp;${{fmtProfit(m.profit)}}</span></div>`;
       tip.style.display = "block";
       const rect = host.getBoundingClientRect();
       tip.style.left = Math.min(x(i) + 12, rect.width - 160) + "px";
@@ -451,7 +471,7 @@ function fmtMonth(m) {{
   }});
   const tableHost = document.getElementById("trend-table");
   let t = `<table class="fd-table"><thead><tr><th>Month</th><th>Revenue</th><th>Expenses</th><th>Profit</th></tr></thead><tbody>`;
-  months.forEach(m => {{ t += `<tr><td>${{fmtMonth(m.month)}}</td><td class="fd-num">${{fmtCurrency(m.revenue)}}</td><td class="fd-num">${{fmtCurrency(m.expenses)}}</td><td class="fd-num">${{fmtCurrency(m.profit)}}</td></tr>`; }});
+  months.forEach(m => {{ t += `<tr><td>${{fmtMonth(m.month)}}</td><td class="fd-num">${{fmtCurrency(m.revenue)}}</td><td class="fd-num">${{fmtExpense(m.expenses)}}</td><td class="fd-num">${{fmtProfit(m.profit)}}</td></tr>`; }});
   t += `</tbody></table>`;
   tableHost.innerHTML = t;
 }})();
@@ -463,18 +483,17 @@ function fmtMonth(m) {{
   const plotW = w - padL - padR, plotH = h - padT - padB;
   const months = DATA.monthly;
   const maxAbs = Math.max(1, ...months.map(m => Math.abs(m.profit)));
-  const zeroY = padT + plotH / 2;
-  const scale = (plotH / 2) / maxAbs;
+  const baseline = padT + plotH;
   const slot = plotW / months.length;
   const bw = Math.min(24, slot - 6);
   let svg = `<svg viewBox="0 0 ${{w}} ${{h}}" width="100%" height="${{h}}" style="overflow:visible;">`;
-  svg += `<line x1="${{padL}}" y1="${{zeroY}}" x2="${{w-padR}}" y2="${{zeroY}}" stroke="var(--baseline)" stroke-width="1"/>`;
+  svg += `<line x1="${{padL}}" y1="${{baseline}}" x2="${{w-padR}}" y2="${{baseline}}" stroke="var(--baseline)" stroke-width="1"/>`;
   months.forEach((m, i) => {{
     const cx = padL + slot * i + slot/2;
-    const barH = Math.abs(m.profit) * scale;
-    const yTop = m.profit >= 0 ? zeroY - barH : zeroY;
-    const color = m.profit >= 0 ? "var(--good)" : "var(--critical)";
-    svg += `<rect x="${{cx - bw/2}}" y="${{yTop}}" width="${{bw}}" height="${{Math.max(barH,1)}}" rx="3" fill="${{color}}"/>`;
+    const barH = Math.max(Math.abs(m.profit) * (plotH / maxAbs), m.profit !== 0 ? 2 : 1);
+    const yTop = baseline - barH;
+    const color = m.profit > 0 ? "var(--good)" : m.profit < 0 ? "var(--critical)" : "var(--baseline)";
+    svg += `<rect x="${{cx - bw/2}}" y="${{yTop}}" width="${{bw}}" height="${{barH}}" rx="3" fill="${{color}}"/>`;
     const step = Math.ceil(months.length / 7);
     if (i % step === 0 || i === months.length - 1) {{
       svg += `<text x="${{cx}}" y="${{h-8}}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${{fmtMonth(m.month)}}</text>`;
@@ -489,7 +508,7 @@ function fmtMonth(m) {{
   host.querySelectorAll(".fd-phit").forEach(el => {{
     el.addEventListener("mouseenter", () => {{
       const i = +el.getAttribute("data-i"); const m = months[i];
-      tip.innerHTML = `<div style="font-weight:600;">${{fmtMonth(m.month)}}</div><div>${{fmtCurrency(m.profit)}}</div>`;
+      tip.innerHTML = `<div style="font-weight:600;">${{fmtMonth(m.month)}}</div><div>${{fmtProfit(m.profit)}}</div>`;
       tip.style.display = "block";
       const rect = el.getBoundingClientRect(), hostRect = host.getBoundingClientRect();
       tip.style.left = Math.min(rect.left - hostRect.left, hostRect.width - 140) + "px";
@@ -499,7 +518,7 @@ function fmtMonth(m) {{
   }});
   const tableHost = document.getElementById("profit-table");
   let t = `<table class="fd-table"><thead><tr><th>Month</th><th>Profit</th></tr></thead><tbody>`;
-  months.forEach(m => {{ t += `<tr><td>${{fmtMonth(m.month)}}</td><td class="fd-num">${{fmtCurrency(m.profit)}}</td></tr>`; }});
+  months.forEach(m => {{ t += `<tr><td>${{fmtMonth(m.month)}}</td><td class="fd-num">${{fmtProfit(m.profit)}}</td></tr>`; }});
   t += `</tbody></table>`;
   tableHost.innerHTML = t;
 }})();
@@ -515,7 +534,7 @@ function fmtMonth(m) {{
   let html = "";
   cats.forEach(c => {{
     const pct = (c.amount / max) * 100;
-    html += `<div class="fd-cat-bar-row"><div class="fd-cat-label">${{c.category}}</div><div class="fd-cat-track"><div class="fd-cat-fill" style="width:${{pct}}%"></div></div><div class="fd-cat-value">${{fmtCurrency(c.amount)}}</div></div>`;
+    html += `<div class="fd-cat-bar-row"><div class="fd-cat-label">${{c.category}}</div><div class="fd-cat-track"><div class="fd-cat-fill" style="width:${{pct}}%"></div></div><div class="fd-cat-value">${{fmtExpense(c.amount)}}</div></div>`;
   }});
   host.innerHTML = html;
 }})();
@@ -530,8 +549,8 @@ function fmtMonth(m) {{
     const receipt = r.receipt_drive_link ? `<a class="fd-btn" href="${{r.receipt_drive_link}}" target="_blank" rel="noopener">Receipt</a>` : "";
     const currencySymbols = {{PHP: "₱", EUR: "€"}};
     const amountCell = (r.original_currency && r.original_currency !== "USD")
-      ? `${{fmtCurrency(r.amount)}}<div style="font-size:11px; color:var(--text-muted);">${{currencySymbols[r.original_currency] || r.original_currency + " "}}${{Number(r.original_amount).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}} @ ${{r.fx_rate!=null ? r.fx_rate.toFixed(5) : "?"}}</div>`
-      : fmtCurrency(r.amount);
+      ? `${{fmtExpense(r.amount)}}<div style="font-size:11px; color:var(--text-muted);">${{currencySymbols[r.original_currency] || r.original_currency + " "}}${{Number(r.original_amount).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}} @ ${{r.fx_rate!=null ? r.fx_rate.toFixed(5) : "?"}}</div>`
+      : fmtExpense(r.amount);
     html += `<tr><td>${{r.date}}</td><td>${{r.category}}</td><td>${{r.type_label||''}}</td><td>${{r.vendor||""}}</td><td>${{r.description||""}}</td><td>${{r.reference_number||""}}</td><td>${{receipt}}</td><td class="fd-num">${{amountCell}}</td>${{actions}}</tr>`;
   }});
   host.innerHTML = html;
@@ -555,9 +574,9 @@ def monthly_body(data):
     rows = data["monthly"][-6:] + data["monthly_forecast"]
     trs = ""
     for r in data["monthly"][-6:]:
-        trs += f'<tr><td>{r["month"]}</td><td>Actual</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_currency_py(r["expenses"])}</td><td class="fd-num">{fmt_currency_py(r["profit"])}</td></tr>'
+        trs += f'<tr><td>{r["month"]}</td><td>Actual</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_expense_py(r["expenses"])}</td><td class="fd-num">{fmt_profit_py(r["profit"])}</td></tr>'
     for r in data["monthly_forecast"]:
-        trs += f'<tr class="fd-forecast"><td>{r["month"]}</td><td>Forecast</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_currency_py(r["expenses"])}</td><td class="fd-num">{fmt_currency_py(r["profit"])}</td></tr>'
+        trs += f'<tr class="fd-forecast"><td>{r["month"]}</td><td>Forecast</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_expense_py(r["expenses"])}</td><td class="fd-num">{fmt_profit_py(r["profit"])}</td></tr>'
     return f"""
     <div class="fd-card">
       <div class="fd-card-head"><h2 class="fd-card-title">Monthly P&L — actuals + 6-month forecast</h2></div>
@@ -573,7 +592,7 @@ def monthly_body(data):
 def annual_body(data):
     trs = ""
     for r in data["annual"]:
-        trs += f'<tr><td>{r["year"]}</td><td>{r["label"]}</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_currency_py(r["expenses"])}</td><td class="fd-num">{fmt_currency_py(r["profit"])}</td></tr>'
+        trs += f'<tr><td>{r["year"]}</td><td>{r["label"]}</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_expense_py(r["expenses"])}</td><td class="fd-num">{fmt_profit_py(r["profit"])}</td></tr>'
     return f"""
     <div class="fd-card">
       <div class="fd-card-head"><h2 class="fd-card-title">Annual P&L</h2></div>
