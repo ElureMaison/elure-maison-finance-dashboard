@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '23 13 * * *'   # ~daily, off a round hour so it doesn't queue behind everyone else's 00:00/12:00 jobs
   workflow_dispatch: {}
+  push:
+    branches: [master]
 
 permissions:
   contents: read
@@ -39,7 +41,7 @@ jobs:
           EXPENSE_SHEET_ID: ${{ secrets.EXPENSE_SHEET_ID }}
 
       - name: Generate dashboard
-        run: python generate_dashboard.py docs/index.html
+        run: python generate_dashboard.py
         env:
           GATE_PASSWORD: ${{ secrets.GATE_PASSWORD }}
 
