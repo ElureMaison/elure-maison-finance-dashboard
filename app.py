@@ -255,13 +255,13 @@ def parse_form(existing_receipt_link=None):
     entered_amount = float(f.get("amount") or 0)
     currency = f.get("currency", "USD").strip().upper()
 
-    if currency == "PHP":
+    if currency != "USD":
         try:
-            usd_amount, rate = fx_convert.convert_to_usd(entered_amount, "PHP", date_val)
+            usd_amount, rate = fx_convert.convert_to_usd(entered_amount, currency, date_val)
         except Exception as e:
-            print(f"FX conversion failed ({e}) - saving PHP amount as-is, flag and fix manually")
+            print(f"FX conversion failed ({e}) - saving {currency} amount as-is, flag and fix manually")
             usd_amount, rate = entered_amount, None
-        original_currency, original_amount, fx_rate = "PHP", entered_amount, rate
+        original_currency, original_amount, fx_rate = currency, entered_amount, rate
         amount = usd_amount
     else:
         amount = entered_amount
@@ -345,7 +345,7 @@ def edit(txn_id):
         <label>Vendor <input type="text" name="vendor" value="{existing['vendor'] or ''}"></label>
         <label>Description <input type="text" name="description" value="{existing['description'] or ''}"></label>
         <label>Amount <input type="number" step="0.01" name="amount" value="{existing['original_amount'] if existing['original_currency'] else existing['amount']}" required></label>
-        <label>Currency <select name="currency"><option value="USD" {"selected" if not existing["original_currency"] or existing["original_currency"]=="USD" else ""}>USD</option><option value="PHP" {"selected" if existing["original_currency"]=="PHP" else ""}>PHP</option></select></label>
+        <label>Currency <select name="currency"><option value="USD" {"selected" if not existing["original_currency"] or existing["original_currency"]=="USD" else ""}>USD</option><option value="PHP" {"selected" if existing["original_currency"]=="PHP" else ""}>PHP</option><option value="EUR" {"selected" if existing["original_currency"]=="EUR" else ""}>EUR</option></select></label>
         <label>Payment method <select name="payment_method">{pm_options}</select></label>
         <label>Or add new method <input type="text" name="new_payment_method" placeholder="e.g. Amex ...1234"></label>
         <label>Transaction # <input type="text" name="reference_number" value="{existing['reference_number'] or ''}"></label>

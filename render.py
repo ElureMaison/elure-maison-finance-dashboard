@@ -316,7 +316,7 @@ def dashboard_body(data, editable=False):
         <label>Vendor <input type="text" name="vendor"></label>
         <label>Description <input type="text" name="description"></label>
         <label>Amount <input type="number" step="0.01" name="amount" required></label>
-        <label>Currency <select name="currency"><option value="USD" selected>USD</option><option value="PHP">PHP</option></select></label>
+        <label>Currency <select name="currency"><option value="USD" selected>USD</option><option value="PHP">PHP</option><option value="EUR">EUR</option></select></label>
         <label>Payment method <select name="payment_method">{{PAYMENT_METHOD_OPTIONS}}</select></label>
         <label>Or add new method <input type="text" name="new_payment_method" placeholder="e.g. Amex ...1234"></label>
         <label>Transaction # <input type="text" name="reference_number" placeholder="auto-detected from receipt if left blank"></label>
@@ -528,8 +528,9 @@ function fmtMonth(m) {{
   rows.forEach(r => {{
     const actions = EDITABLE ? `<td class="fd-actions-cell"><a class="fd-btn" href="/edit/${{r.id||''}}">Edit</a><form method="POST" action="/delete/${{r.id||''}}" style="display:inline;" onsubmit="return confirm('Delete this expense?');"><button class="fd-btn fd-btn-danger" type="submit">Del</button></form></td>` : "";
     const receipt = r.receipt_drive_link ? `<a class="fd-btn" href="${{r.receipt_drive_link}}" target="_blank" rel="noopener">Receipt</a>` : "";
-    const amountCell = r.original_currency === "PHP"
-      ? `${{fmtCurrency(r.amount)}}<div style="font-size:11px; color:var(--text-muted);">₱${{Number(r.original_amount).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}} @ ${{r.fx_rate!=null ? r.fx_rate.toFixed(5) : "?"}}</div>`
+    const currencySymbols = {{PHP: "₱", EUR: "€"}};
+    const amountCell = (r.original_currency && r.original_currency !== "USD")
+      ? `${{fmtCurrency(r.amount)}}<div style="font-size:11px; color:var(--text-muted);">${{currencySymbols[r.original_currency] || r.original_currency + " "}}${{Number(r.original_amount).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}} @ ${{r.fx_rate!=null ? r.fx_rate.toFixed(5) : "?"}}</div>`
       : fmtCurrency(r.amount);
     html += `<tr><td>${{r.date}}</td><td>${{r.category}}</td><td>${{r.type_label||''}}</td><td>${{r.vendor||""}}</td><td>${{r.description||""}}</td><td>${{r.reference_number||""}}</td><td>${{receipt}}</td><td class="fd-num">${{amountCell}}</td>${{actions}}</tr>`;
   }});
