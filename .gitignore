@@ -1,4 +1,8 @@
 finance_data.json
-docs/index.html
+docs/*.html
 __pycache__/
 *.pyc
+credentials.json
+token_sheets.json
+finances.db
+local_config.py

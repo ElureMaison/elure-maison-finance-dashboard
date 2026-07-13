@@ -3,8 +3,9 @@ sync_finance_dashboard.py
 
 CI version - pulls last 13 months of paid Shopify orders + all expense rows
 from the "Elure Maison - Expenses" Google Sheet, aggregates both by month,
-and writes finance_data.json. Auth is entirely via environment variables
-(GitHub Actions secrets) - no local token files, no interactive login.
+computes Monthly/Annual P&L forecasts and open Accounts Payable, and writes
+finance_data.json. Auth is entirely via environment variables (GitHub
+Actions secrets) - no local token files, no interactive login.
 
 Required env vars:
   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
@@ -15,24 +16,21 @@ Required env vars:
 import os
 import json
 import re
-import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from collections import defaultdict
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+from finance_common import (
+    normalize_type, type_label, build_month_range,
+    compute_monthly_forecast, compute_annual_forecast, group_ap_by_due_date,
+)
+from shopify_revenue import fetch_orders, aggregate_revenue, month_key
+
 EXPENSE_SHEET_ID = os.environ.get("EXPENSE_SHEET_ID", "1Aa_Z6hd854sHRkKhkvFHvDrMAmuR09DtCm-51fjvdug")
-
-SHOPIFY_STORE = "elure-maison.myshopify.com"
-SHOPIFY_TOKEN = os.environ["SHOPIFY_TOKEN"]
-SHOPIFY_API_VERSION = "2024-01"
-
 MONTHS_BACK = 13  # 12 full months + current partial month
-
-
-def month_key(dt):
-    return dt.strftime("%Y-%m")
+FORECAST_MONTHS = 6
 
 
 def get_sheets_creds():
@@ -51,15 +49,15 @@ def get_sheets_creds():
 def fetch_expenses():
     creds = get_sheets_creds()
     sheets = build("sheets", "v4", credentials=creds)
-    resp = sheets.spreadsheets().values().get(spreadsheetId=EXPENSE_SHEET_ID, range="Expenses!A2:G1000").execute()
+    resp = sheets.spreadsheets().values().get(spreadsheetId=EXPENSE_SHEET_ID, range="Expenses!A2:I1000").execute()
     rows = resp.get("values", [])
 
     expenses = []
     for row in rows:
         if not row or not row[0]:
             continue
-        row = row + [""] * (7 - len(row))
-        date_str, category, vendor, description, amount_str, payment_method, notes = row[:7]
+        row = row + [""] * (9 - len(row))
+        date_str, category, vendor, description, amount_str, payment_method, notes, unpaid_str, due_date = row[:9]
         try:
             date = datetime.strptime(date_str.strip(), "%Y-%m-%d")
         except ValueError:
@@ -69,78 +67,23 @@ def fetch_expenses():
             amount = abs(float(amount_clean))
         except ValueError:
             continue
+        unpaid = unpaid_str.strip().upper() == "TRUE"
+        category = category.strip() or "Other"
+        t = normalize_type(category, unpaid)
         expenses.append({
             "date": date_str.strip(),
             "month": month_key(date),
-            "category": category.strip() or "Other",
+            "category": category,
             "vendor": vendor.strip(),
             "description": description.strip(),
             "amount": round(amount, 2),
+            "payment_method": payment_method.strip(),
+            "unpaid": unpaid,
+            "due_date": due_date.strip() or None,
+            "type": t,
+            "type_label": type_label(t),
         })
     return expenses
-
-
-def fetch_orders():
-    since = (datetime.now(timezone.utc) - timedelta(days=MONTHS_BACK * 31)).strftime("%Y-%m-%dT00:00:00Z")
-    orders = []
-    url = f"https://{SHOPIFY_STORE}/admin/api/{SHOPIFY_API_VERSION}/orders.json"
-    params = {
-        "status": "any",
-        "financial_status": "paid",
-        "created_at_min": since,
-        "limit": 250,
-        "fields": "id,created_at,total_price,current_total_price,total_discounts,subtotal_price,total_tax,cancelled_at,refunds",
-    }
-    headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN}
-
-    while url:
-        resp = requests.get(url, headers=headers, params=params)
-        if resp.status_code == 403:
-            print("Shopify orders access denied (missing read_orders scope) - revenue will be zero.")
-            return []
-        resp.raise_for_status()
-        data = resp.json()
-        orders.extend(data.get("orders", []))
-
-        link = resp.headers.get("Link", "")
-        next_url = None
-        for part in link.split(","):
-            if 'rel="next"' in part:
-                next_url = part.split(";")[0].strip().strip("<>")
-        url = next_url
-        params = None  # pagination URL already includes params
-
-    return orders
-
-
-def aggregate_revenue(orders):
-    monthly = defaultdict(lambda: {"gross": 0.0, "refunds": 0.0, "orders": 0})
-    for o in orders:
-        if o.get("cancelled_at"):
-            continue
-        created = datetime.strptime(o["created_at"][:10], "%Y-%m-%d")
-        m = month_key(created)
-        monthly[m]["gross"] += float(o.get("current_total_price") or o.get("total_price") or 0)
-        monthly[m]["orders"] += 1
-        for refund in o.get("refunds", []):
-            for line in refund.get("transactions", []):
-                if line.get("kind") == "refund":
-                    monthly[m]["refunds"] += float(line.get("amount") or 0)
-    return monthly
-
-
-def build_month_range():
-    today = datetime.now(timezone.utc)
-    months = []
-    y, m = today.year, today.month
-    for i in range(MONTHS_BACK - 1, -1, -1):
-        mm = m - i
-        yy = y
-        while mm <= 0:
-            mm += 12
-            yy -= 1
-        months.append(f"{yy:04d}-{mm:02d}")
-    return months
 
 
 def main():
@@ -149,11 +92,11 @@ def main():
     print(f"  {len(expenses)} expense rows")
 
     print("Fetching Shopify orders...")
-    orders = fetch_orders()
+    orders = fetch_orders(token=os.environ["SHOPIFY_TOKEN"], months_back=MONTHS_BACK)
     print(f"  {len(orders)} paid orders")
     revenue_by_month = aggregate_revenue(orders)
 
-    months = build_month_range()
+    months = build_month_range(MONTHS_BACK)
 
     expenses_by_month = defaultdict(float)
     category_totals_current_month = defaultdict(float)
@@ -181,12 +124,21 @@ def main():
     ytd_revenue = sum(s["revenue"] for s in ytd_months)
     ytd_expenses = sum(s["expenses"] for s in ytd_months)
 
+    open_ap = [e for e in expenses if e["unpaid"]]
+    total_ap = round(sum(e["amount"] for e in open_ap), 2)
+    ap_groups = group_ap_by_due_date(open_ap)
+
+    monthly_forecast = compute_monthly_forecast(series, forecast_months=FORECAST_MONTHS, growth_pct=0.0)
+    annual = compute_annual_forecast(series, monthly_forecast)
+
     recent_expenses = sorted(expenses, key=lambda e: e["date"], reverse=True)[:12]
 
     snapshot = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "store": "Elure Maison",
         "monthly": series,
+        "monthly_forecast": monthly_forecast,
+        "annual": annual,
         "mtd": mtd,
         "ytd": {
             "revenue": round(ytd_revenue, 2),
@@ -197,6 +149,8 @@ def main():
             {"category": k, "amount": round(v, 2)} for k, v in sorted(category_totals_current_month.items(), key=lambda x: -x[1])
         ],
         "recent_expenses": recent_expenses,
+        "total_ap": total_ap,
+        "ap_groups": ap_groups,
         "orders_scope_ok": len(orders) > 0 or sum(v["orders"] for v in revenue_by_month.values()) > 0,
     }
 
@@ -205,6 +159,7 @@ def main():
 
     print("Wrote finance_data.json")
     print(f"MTD revenue: ${mtd['revenue']:,.2f}  MTD expenses: ${mtd['expenses']:,.2f}  MTD profit: ${mtd['profit']:,.2f}")
+    print(f"Open AP: ${total_ap:,.2f} across {len(open_ap)} items")
 
 
 if __name__ == "__main__":
