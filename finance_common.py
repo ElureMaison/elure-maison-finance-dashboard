@@ -36,6 +36,7 @@ CATEGORIES = [
     "Shipping",
     "Advertising",
     "Software / Apps",
+    "Website",
     "Payroll / Contractors",
     "Packaging",
     "Fees (Shopify, payment processing)",
