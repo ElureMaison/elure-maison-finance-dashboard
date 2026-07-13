@@ -47,6 +47,17 @@ CATEGORIES = [
 
 DEFAULT_PAYMENT_METHODS = [
     "Visa ...6539",
+    "GCash - 9090",
+    "BPI - 4927",
+    "BPI - 7255",
+    "PayPal",
+    "GoTyme - 6539",
+    "GoTyme - 1291",
+    "Security Bank - 4981",
+    "PS Bank - 7399",
+    "Wise - 0974",
+    "Wise - 8255",
+    "MariBank - 3306",
 ]
 
 
