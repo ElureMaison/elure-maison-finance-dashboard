@@ -181,7 +181,9 @@ def dashboard():
     data = build_finance_data()
     pm_options = "".join(f'<option value="{p}">{p}</option>' for p in get_payment_methods())
     body = dashboard_body(data, editable=True).replace("{PAYMENT_METHOD_OPTIONS}", pm_options)
-    body = f'<div style="margin-bottom:12px;"><a href="/sync" class="fd-btn">Sync from Sheet</a> <form method="POST" action="/logout" style="display:inline;"><button class="fd-btn" type="submit">Log out</button></form></div>' + body
+    warning = request.args.get("warning")
+    warning_html = f'<div class="fd-card" style="border-color:var(--critical); color:var(--critical); margin-bottom:12px;">{warning}</div>' if warning else ""
+    body = f'<div style="margin-bottom:12px;"><a href="/sync" class="fd-btn">Sync from Sheet</a> <form method="POST" action="/logout" style="display:inline;"><button class="fd-btn" type="submit">Log out</button></form></div>' + warning_html + body
     return page("Elure Maison — Finance Dashboard", "dashboard", body, data)
 
 
@@ -221,17 +223,24 @@ def parse_form(existing_receipt_link=None):
 
     reference_number = f.get("reference_number", "").strip() or None
     receipt_link = existing_receipt_link
+    receipt_upload_failed = False
 
     receipt_file = request.files.get("receipt_file")
     if receipt_file and receipt_file.filename:
         date_str = f.get("date", "")
         year = date_str[:4] if date_str[:4].isdigit() else str(datetime.now().year)
-        receipt_link, file_id = drive_receipts.upload_receipt(receipt_file, year)
-        if not reference_number:
-            try:
-                reference_number = ocr_receipt.detect_reference_number(file_id)
-            except Exception:
-                reference_number = None
+        try:
+            receipt_link, file_id = drive_receipts.upload_receipt(receipt_file, year)
+            if not reference_number:
+                try:
+                    reference_number = ocr_receipt.detect_reference_number(file_id)
+                except Exception:
+                    reference_number = None
+        except Exception as e:
+            # A network hiccup reaching Drive shouldn't lose the whole expense
+            # entry - save everything else, just skip the receipt this time.
+            print(f"Receipt upload failed ({e}) - saving expense without it")
+            receipt_upload_failed = True
 
     date_val = f.get("date", "")
     entered_amount = float(f.get("amount") or 0)
@@ -265,6 +274,7 @@ def parse_form(existing_receipt_link=None):
         "original_currency": original_currency,
         "original_amount": original_amount,
         "fx_rate": fx_rate,
+        "receipt_upload_failed": receipt_upload_failed,
     }
 
 
@@ -282,6 +292,8 @@ def add():
           txn["original_currency"], txn["original_amount"], txn["fx_rate"]))
     conn.commit()
     conn.close()
+    if txn["receipt_upload_failed"]:
+        return redirect(url_for("dashboard", warning="Expense saved, but the receipt upload failed (network issue) - edit this entry to try attaching it again."))
     return redirect(url_for("dashboard"))
 
 
@@ -305,6 +317,8 @@ def edit(txn_id):
               txn["original_currency"], txn["original_amount"], txn["fx_rate"], txn_id))
         conn.commit()
         conn.close()
+        if txn["receipt_upload_failed"]:
+            return redirect(url_for("dashboard", warning="Saved, but the receipt upload failed (network issue) - edit this entry to try attaching it again."))
         return redirect(url_for("dashboard"))
 
     conn.close()
