@@ -21,7 +21,7 @@ def parse_amount(raw):
 def sync():
     creds = get_creds()
     sheets = build("sheets", "v4", credentials=creds)
-    resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="Expenses!A2:I1000").execute()
+    resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="Expenses!A2:N1000").execute()
     rows = resp.get("values", [])
 
     conn = sqlite3.connect(DB_FILE)
@@ -32,18 +32,26 @@ def sync():
     for i, row in enumerate(rows, start=2):
         if not row or not row[0]:
             continue
-        row = row + [""] * (9 - len(row))
-        date_, category, vendor, description, amount_str, payment_method, notes, unpaid_str, due_date = row[:9]
+        row = row + [""] * (14 - len(row))
+        (date_, category, vendor, description, amount_str, payment_method, notes, unpaid_str, due_date,
+         receipt_link, reference_number, original_currency, original_amount_str, fx_rate_str) = row[:14]
         if not date_.strip():
             continue
         amount = parse_amount(amount_str)
         unpaid = 1 if unpaid_str.strip().upper() == "TRUE" else 0
         t = normalize_type(category, unpaid)
+        original_amount = parse_amount(original_amount_str) if original_amount_str.strip() else None
+        try:
+            fx_rate = float(fx_rate_str) if fx_rate_str.strip() else None
+        except ValueError:
+            fx_rate = None
         c.execute("""
-            INSERT INTO transactions (date, category, vendor, description, amount, payment_method, notes, unpaid, due_date, type, sheet_row)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (date, category, vendor, description, amount, payment_method, notes, unpaid, due_date, type, sheet_row, receipt_drive_link, reference_number, original_currency, original_amount, fx_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (date_.strip(), category.strip() or "Other", vendor.strip(), description.strip(), amount,
-              payment_method.strip(), notes.strip(), unpaid, due_date.strip() or None, t, i))
+              payment_method.strip(), notes.strip(), unpaid, due_date.strip() or None, t, i,
+              receipt_link.strip() or None, reference_number.strip() or None,
+              original_currency.strip() or None, original_amount, fx_rate))
         count += 1
 
     conn.commit()

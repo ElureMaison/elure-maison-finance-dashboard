@@ -49,15 +49,16 @@ def get_sheets_creds():
 def fetch_expenses():
     creds = get_sheets_creds()
     sheets = build("sheets", "v4", credentials=creds)
-    resp = sheets.spreadsheets().values().get(spreadsheetId=EXPENSE_SHEET_ID, range="Expenses!A2:I1000").execute()
+    resp = sheets.spreadsheets().values().get(spreadsheetId=EXPENSE_SHEET_ID, range="Expenses!A2:N1000").execute()
     rows = resp.get("values", [])
 
     expenses = []
     for row in rows:
         if not row or not row[0]:
             continue
-        row = row + [""] * (9 - len(row))
-        date_str, category, vendor, description, amount_str, payment_method, notes, unpaid_str, due_date = row[:9]
+        row = row + [""] * (14 - len(row))
+        (date_str, category, vendor, description, amount_str, payment_method, notes, unpaid_str, due_date,
+         receipt_link, reference_number, original_currency, original_amount_str, fx_rate_str) = row[:14]
         try:
             date = datetime.strptime(date_str.strip(), "%Y-%m-%d")
         except ValueError:
@@ -82,6 +83,11 @@ def fetch_expenses():
             "due_date": due_date.strip() or None,
             "type": t,
             "type_label": type_label(t),
+            "receipt_drive_link": receipt_link.strip() or None,
+            "reference_number": reference_number.strip() or None,
+            "original_currency": original_currency.strip() or None,
+            "original_amount": float(original_amount_str) if original_amount_str.strip() else None,
+            "fx_rate": float(fx_rate_str) if fx_rate_str.strip() else None,
         })
     return expenses
 

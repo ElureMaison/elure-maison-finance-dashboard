@@ -254,13 +254,17 @@ def dashboard_body(data, editable=False):
         add_form = f"""
     <div class="fd-card">
       <div class="fd-card-head"><h2 class="fd-card-title">Add expense</h2></div>
-      <form method="POST" action="/add" class="fd-form-row" style="align-items:end;">
+      <form method="POST" action="/add" enctype="multipart/form-data" class="fd-form-row" style="align-items:end;">
         <label>Date <input type="date" name="date" required></label>
         <label>Category <select name="category">{cats_options}</select></label>
         <label>Vendor <input type="text" name="vendor"></label>
         <label>Description <input type="text" name="description"></label>
         <label>Amount <input type="number" step="0.01" name="amount" required></label>
-        <label>Payment method <input type="text" name="payment_method" list="pm-list"><datalist id="pm-list">{{PAYMENT_METHOD_OPTIONS}}</datalist></label>
+        <label>Currency <select name="currency"><option value="USD" selected>USD</option><option value="PHP">PHP</option></select></label>
+        <label>Payment method <select name="payment_method">{{PAYMENT_METHOD_OPTIONS}}</select></label>
+        <label>Or add new method <input type="text" name="new_payment_method" placeholder="e.g. Amex ...1234"></label>
+        <label>Transaction # <input type="text" name="reference_number" placeholder="auto-detected from receipt if left blank"></label>
+        <label>Receipt <input type="file" name="receipt_file" accept="image/*,.pdf"></label>
         <label style="flex-direction:row; align-items:center; gap:6px;"><input type="checkbox" name="unpaid" value="1" onchange="document.getElementById('due-date-field').style.display=this.checked?'flex':'none'" style="width:auto;"> Unpaid</label>
         <label id="due-date-field" style="display:none;">Due date <input type="date" name="due_date"></label>
         <button type="submit" class="fd-btn">Add</button>
@@ -309,7 +313,7 @@ def dashboard_body(data, editable=False):
         <h2 class="fd-card-title">Recent expenses</h2>
       </div>
       <table class="fd-table">
-        <thead><tr><th>Date</th><th>Category</th><th>Type</th><th>Vendor</th><th>Description</th><th>Amount</th>{actions_th}</tr></thead>
+        <thead><tr><th>Date</th><th>Category</th><th>Type</th><th>Vendor</th><th>Description</th><th>Transaction #</th><th>Receipt</th><th>Amount</th>{actions_th}</tr></thead>
         <tbody id="fd-recent-body"></tbody>
       </table>
     </div>
@@ -467,7 +471,11 @@ function fmtMonth(m) {{
   let html = "";
   rows.forEach(r => {{
     const actions = EDITABLE ? `<td class="fd-actions-cell"><a class="fd-btn" href="/edit/${{r.id||''}}">Edit</a><form method="POST" action="/delete/${{r.id||''}}" style="display:inline;" onsubmit="return confirm('Delete this expense?');"><button class="fd-btn fd-btn-danger" type="submit">Del</button></form></td>` : "";
-    html += `<tr><td>${{r.date}}</td><td>${{r.category}}</td><td>${{r.type_label||''}}</td><td>${{r.vendor||""}}</td><td>${{r.description||""}}</td><td class="fd-num">${{fmtCurrency(r.amount)}}</td>${{actions}}</tr>`;
+    const receipt = r.receipt_drive_link ? `<a class="fd-btn" href="${{r.receipt_drive_link}}" target="_blank" rel="noopener">Receipt</a>` : "";
+    const amountCell = r.original_currency === "PHP"
+      ? `${{fmtCurrency(r.amount)}}<div style="font-size:11px; color:var(--text-muted);">₱${{Number(r.original_amount).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})}} @ ${{r.fx_rate!=null ? r.fx_rate.toFixed(5) : "?"}}</div>`
+      : fmtCurrency(r.amount);
+    html += `<tr><td>${{r.date}}</td><td>${{r.category}}</td><td>${{r.type_label||''}}</td><td>${{r.vendor||""}}</td><td>${{r.description||""}}</td><td>${{r.reference_number||""}}</td><td>${{receipt}}</td><td class="fd-num">${{amountCell}}</td>${{actions}}</tr>`;
   }});
   host.innerHTML = html;
 }})();

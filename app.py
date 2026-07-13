@@ -25,6 +25,9 @@ from shopify_revenue import fetch_orders, aggregate_revenue, month_key
 from render import shell, dashboard_body, monthly_body, annual_body, ap_body
 import sync_sheet
 import sheet_write
+import drive_receipts
+import ocr_receipt
+import fx_convert
 from init_db import init_db, DB_FILE
 from local_config import SHOPIFY_TOKEN
 
@@ -176,7 +179,7 @@ def page(title, active_tab, body_html, data):
 @app.route("/")
 def dashboard():
     data = build_finance_data()
-    pm_options = "".join(f'<option value="{p}"></option>' for p in get_payment_methods())
+    pm_options = "".join(f'<option value="{p}">{p}</option>' for p in get_payment_methods())
     body = dashboard_body(data, editable=True).replace("{PAYMENT_METHOD_OPTIONS}", pm_options)
     body = f'<div style="margin-bottom:12px;"><a href="/sync" class="fd-btn">Sync from Sheet</a> <form method="POST" action="/logout" style="display:inline;"><button class="fd-btn" type="submit">Log out</button></form></div>' + body
     return page("Elure Maison — Finance Dashboard", "dashboard", body, data)
@@ -206,7 +209,7 @@ def sync_route():
     return redirect(url_for("dashboard"))
 
 
-def parse_form():
+def parse_form(existing_receipt_link=None):
     f = request.form
     category = f.get("category", "Other")
     unpaid = f.get("unpaid") == "1"
@@ -215,17 +218,53 @@ def parse_form():
     if new_pm:
         payment_method = new_pm
         register_payment_method(new_pm)
+
+    reference_number = f.get("reference_number", "").strip() or None
+    receipt_link = existing_receipt_link
+
+    receipt_file = request.files.get("receipt_file")
+    if receipt_file and receipt_file.filename:
+        date_str = f.get("date", "")
+        year = date_str[:4] if date_str[:4].isdigit() else str(datetime.now().year)
+        receipt_link, file_id = drive_receipts.upload_receipt(receipt_file, year)
+        if not reference_number:
+            try:
+                reference_number = ocr_receipt.detect_reference_number(file_id)
+            except Exception:
+                reference_number = None
+
+    date_val = f.get("date", "")
+    entered_amount = float(f.get("amount") or 0)
+    currency = f.get("currency", "USD").strip().upper()
+
+    if currency == "PHP":
+        try:
+            usd_amount, rate = fx_convert.convert_to_usd(entered_amount, "PHP", date_val)
+        except Exception as e:
+            print(f"FX conversion failed ({e}) - saving PHP amount as-is, flag and fix manually")
+            usd_amount, rate = entered_amount, None
+        original_currency, original_amount, fx_rate = "PHP", entered_amount, rate
+        amount = usd_amount
+    else:
+        amount = entered_amount
+        original_currency, original_amount, fx_rate = None, None, None
+
     return {
-        "date": f.get("date", ""),
+        "date": date_val,
         "category": category,
         "vendor": f.get("vendor", ""),
         "description": f.get("description", ""),
-        "amount": float(f.get("amount") or 0),
+        "amount": amount,
         "payment_method": payment_method,
         "notes": f.get("notes", ""),
         "unpaid": unpaid,
         "due_date": f.get("due_date") or None,
         "type": normalize_type(category, unpaid),
+        "receipt_drive_link": receipt_link,
+        "reference_number": reference_number,
+        "original_currency": original_currency,
+        "original_amount": original_amount,
+        "fx_rate": fx_rate,
     }
 
 
@@ -235,10 +274,12 @@ def add():
     sheet_row = sheet_write.append_row(txn)
     conn = db()
     conn.execute("""
-        INSERT INTO transactions (date, category, vendor, description, amount, payment_method, notes, unpaid, due_date, type, sheet_row)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO transactions (date, category, vendor, description, amount, payment_method, notes, unpaid, due_date, type, sheet_row, receipt_drive_link, reference_number, original_currency, original_amount, fx_rate)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (txn["date"], txn["category"], txn["vendor"], txn["description"], txn["amount"],
-          txn["payment_method"], txn["notes"], int(txn["unpaid"]), txn["due_date"], txn["type"], sheet_row))
+          txn["payment_method"], txn["notes"], int(txn["unpaid"]), txn["due_date"], txn["type"], sheet_row,
+          txn["receipt_drive_link"], txn["reference_number"],
+          txn["original_currency"], txn["original_amount"], txn["fx_rate"]))
     conn.commit()
     conn.close()
     return redirect(url_for("dashboard"))
@@ -253,36 +294,45 @@ def edit(txn_id):
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
-        txn = parse_form()
+        txn = parse_form(existing_receipt_link=existing["receipt_drive_link"])
         sheet_write.update_row(existing["sheet_row"], txn)
         conn.execute("""
-            UPDATE transactions SET date=?, category=?, vendor=?, description=?, amount=?, payment_method=?, notes=?, unpaid=?, due_date=?, type=?
+            UPDATE transactions SET date=?, category=?, vendor=?, description=?, amount=?, payment_method=?, notes=?, unpaid=?, due_date=?, type=?, receipt_drive_link=?, reference_number=?, original_currency=?, original_amount=?, fx_rate=?
             WHERE id=?
         """, (txn["date"], txn["category"], txn["vendor"], txn["description"], txn["amount"],
-              txn["payment_method"], txn["notes"], int(txn["unpaid"]), txn["due_date"], txn["type"], txn_id))
+              txn["payment_method"], txn["notes"], int(txn["unpaid"]), txn["due_date"], txn["type"],
+              txn["receipt_drive_link"], txn["reference_number"],
+              txn["original_currency"], txn["original_amount"], txn["fx_rate"], txn_id))
         conn.commit()
         conn.close()
         return redirect(url_for("dashboard"))
 
     conn.close()
     cats_options = "".join(f'<option value="{c}" {"selected" if c == existing["category"] else ""}>{c}</option>' for c in CATEGORIES)
+    pm_options = "".join(f'<option value="{p}" {"selected" if p == existing["payment_method"] else ""}>{p}</option>' for p in get_payment_methods())
     unpaid_checked = "checked" if existing["unpaid"] else ""
     due_display = "flex" if existing["unpaid"] else "none"
+    receipt_note = f'<div class="fd-footnote">Current receipt: <a href="{existing["receipt_drive_link"]}" target="_blank" rel="noopener">view</a> (upload a new file to replace it)</div>' if existing["receipt_drive_link"] else ""
     body = f"""
     <div class="fd-card">
       <div class="fd-card-head"><h2 class="fd-card-title">Edit expense</h2></div>
-      <form method="POST" class="fd-form-row" style="align-items:end;">
+      <form method="POST" enctype="multipart/form-data" class="fd-form-row" style="align-items:end;">
         <label>Date <input type="date" name="date" value="{existing['date']}" required></label>
         <label>Category <select name="category">{cats_options}</select></label>
         <label>Vendor <input type="text" name="vendor" value="{existing['vendor'] or ''}"></label>
         <label>Description <input type="text" name="description" value="{existing['description'] or ''}"></label>
-        <label>Amount <input type="number" step="0.01" name="amount" value="{existing['amount']}" required></label>
-        <label>Payment method <input type="text" name="payment_method" value="{existing['payment_method'] or ''}"></label>
+        <label>Amount <input type="number" step="0.01" name="amount" value="{existing['original_amount'] if existing['original_currency'] else existing['amount']}" required></label>
+        <label>Currency <select name="currency"><option value="USD" {"selected" if not existing["original_currency"] or existing["original_currency"]=="USD" else ""}>USD</option><option value="PHP" {"selected" if existing["original_currency"]=="PHP" else ""}>PHP</option></select></label>
+        <label>Payment method <select name="payment_method">{pm_options}</select></label>
+        <label>Or add new method <input type="text" name="new_payment_method" placeholder="e.g. Amex ...1234"></label>
+        <label>Transaction # <input type="text" name="reference_number" value="{existing['reference_number'] or ''}"></label>
+        <label>Replace receipt <input type="file" name="receipt_file" accept="image/*,.pdf"></label>
         <label style="flex-direction:row; align-items:center; gap:6px;"><input type="checkbox" name="unpaid" value="1" {unpaid_checked} onchange="document.getElementById('due-date-field').style.display=this.checked?'flex':'none'" style="width:auto;"> Unpaid</label>
         <label id="due-date-field" style="display:{due_display};">Due date <input type="date" name="due_date" value="{existing['due_date'] or ''}"></label>
         <button type="submit" class="fd-btn">Save</button>
         <a href="/" class="fd-btn" style="background:var(--text-muted);">Cancel</a>
       </form>
+      {receipt_note}
     </div>
     """
     data = build_finance_data(include_shopify=False)
@@ -312,6 +362,8 @@ def mark_paid(txn_id):
             "description": existing["description"], "amount": existing["amount"],
             "payment_method": existing["payment_method"], "notes": existing["notes"],
             "unpaid": False, "due_date": None, "type": t,
+            "receipt_drive_link": existing["receipt_drive_link"], "reference_number": existing["reference_number"],
+            "original_currency": existing["original_currency"], "original_amount": existing["original_amount"], "fx_rate": existing["fx_rate"],
         }
         sheet_write.update_row(existing["sheet_row"], txn)
         conn.execute("UPDATE transactions SET unpaid=0, due_date=NULL, type=? WHERE id=?", (t, txn_id))
