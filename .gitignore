@@ -6,3 +6,4 @@ credentials.json
 token_sheets.json
 finances.db
 local_config.py
+wise_browser_profile/

@@ -118,6 +118,7 @@ table.fd-table tr.fd-overdue td { color: var(--critical); }
 .fd-dropzone.fd-drag-over { border-color: var(--series-revenue); background: var(--page); color: var(--text-primary); }
 .fd-dropzone.fd-has-file { border-style: solid; color: var(--text-primary); }
 .fd-dropzone:focus-visible { outline: 2px solid var(--series-revenue); outline-offset: 2px; }
+.fd-filter-select { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); font-family: inherit; font-size: 12.5px; }
 """
 
 GATE_CSS = """
@@ -178,6 +179,17 @@ document.querySelectorAll(".fd-dropzone").forEach(zone => {
     }
   });
 });
+
+document.querySelectorAll(".fd-toggle").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const id = btn.getAttribute("data-toggle");
+    const el = document.getElementById(id);
+    const chartHost = el.previousElementSibling;
+    el.classList.toggle("fd-hidden");
+    chartHost.classList.toggle("fd-hidden");
+    btn.textContent = el.classList.contains("fd-hidden") ? "View data" : "View chart";
+  });
+});
 """
 
 
@@ -186,6 +198,161 @@ def receipt_dropzone_html(name="receipt_file", note=""):
       <input type="file" name="{name}" accept="image/*,.pdf" style="display:none;">
       <span class="fd-dropzone-label">Drop photo, click to browse, or paste</span>
     </div>{note}"""
+
+
+# Shared chart/KPI JS - used by the Dashboard, Monthly P&L, and Annual P&L
+# pages so they all render identically and a fix in one place fixes all
+# three. Always injected via shell() (no-op if a page has no matching
+# element ids). Charts take a labelFn so the same drawTrendChart/
+# drawProfitChart work for month-keyed rows (Dashboard, Monthly P&L) and
+# year-keyed rows (Annual P&L).
+CHART_JS = """
+function fmtCurrency(n, compact) {
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (compact && abs >= 1000000) return sign + "$" + (abs/1000000).toFixed(1) + "M";
+  if (compact && abs >= 100000) return sign + "$" + (abs/1000).toFixed(0) + "K";
+  return sign + "$" + abs.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtExpense(n, compact) {
+  return `<span class="fd-down">-${fmtCurrency(Math.abs(n), compact)}</span>`;
+}
+function fmtProfit(n, compact) {
+  if (n > 0) return `<span class="fd-up">+${fmtCurrency(n, compact)}</span>`;
+  if (n < 0) return `<span class="fd-down">${fmtCurrency(n, compact)}</span>`;
+  return `<span style="color:var(--text-muted);">${fmtCurrency(n, compact)}</span>`;
+}
+function fmtMonth(m) {
+  const [y, mo] = m.split("-");
+  const d = new Date(parseInt(y), parseInt(mo)-1, 1);
+  return d.toLocaleDateString(undefined, {month: "short", year: "2-digit"});
+}
+
+function renderKpiTiles(hostId, tiles) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  let html = "";
+  tiles.forEach(t => {
+    const subHtml = t.sub ? `<div class="fd-tile-delta">${t.sub}</div>` : "";
+    html += `<div class="fd-tile"><div class="fd-tile-label">${t.label}</div><div class="fd-tile-value">${t.value}</div>${subHtml}</div>`;
+  });
+  host.innerHTML = html;
+}
+
+function drawTrendChart(hostId, tableId, rows, labelFn) {
+  const host = document.getElementById(hostId);
+  if (!host || !rows.length) return;
+  const w = Math.max(host.clientWidth || 960, 320), h = 260;
+  const padL = 56, padR = 16, padT = 16, padB = 28;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const allVals = rows.flatMap(m => [m.revenue, m.expenses]);
+  const maxV = Math.max(1, ...allVals);
+  const niceMax = (() => {
+    const magnitude = Math.pow(10, Math.floor(Math.log10(maxV || 1)));
+    return Math.ceil(maxV / magnitude) * magnitude;
+  })();
+  const x = i => rows.length > 1 ? padL + (i / (rows.length - 1)) * plotW : padL + plotW / 2;
+  const y = v => padT + plotH - (v / niceMax) * plotH;
+  const ticks = 4;
+  let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" style="overflow:visible;">`;
+  for (let t = 0; t <= ticks; t++) {
+    const v = niceMax * t / ticks;
+    const yy = y(v);
+    svg += `<line x1="${padL}" y1="${yy}" x2="${w-padR}" y2="${yy}" stroke="var(--grid)" stroke-width="1"/>`;
+    svg += `<text x="${padL-8}" y="${yy+4}" text-anchor="end" font-size="11" fill="var(--text-muted)">${fmtCurrency(v, true)}</text>`;
+  }
+  const step = Math.ceil(rows.length / 7);
+  rows.forEach((m, i) => {
+    if (i % step === 0 || i === rows.length - 1) {
+      svg += `<text x="${x(i)}" y="${h-8}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${labelFn(m)}</text>`;
+    }
+  });
+  function linePath(key) { return rows.map((m, i) => `${i===0?"M":"L"} ${x(i)} ${y(m[key])}`).join(" "); }
+  svg += `<path d="${linePath("revenue")}" fill="none" stroke="var(--series-revenue)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  svg += `<path d="${linePath("expenses")}" fill="none" stroke="var(--series-expense)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const last = rows.length - 1;
+  svg += `<circle cx="${x(last)}" cy="${y(rows[last].revenue)}" r="4" fill="var(--series-revenue)" stroke="var(--surface-1)" stroke-width="2"/>`;
+  svg += `<circle cx="${x(last)}" cy="${y(rows[last].expenses)}" r="4" fill="var(--series-expense)" stroke="var(--surface-1)" stroke-width="2"/>`;
+  svg += `<text x="${x(last)+8}" y="${y(rows[last].revenue)+4}" font-size="11" fill="var(--series-revenue)" font-weight="600">${fmtCurrency(rows[last].revenue, true)}</text>`;
+  svg += `<text x="${x(last)+8}" y="${y(rows[last].expenses)+4}" font-size="11" fill="var(--series-expense)" font-weight="600">${fmtCurrency(-rows[last].expenses, true)}</text>`;
+  rows.forEach((m, i) => { svg += `<circle data-i="${i}" cx="${x(i)}" cy="${y(m.revenue)}" r="9" fill="transparent" class="fd-hit-${hostId}"/>`; });
+  svg += `</svg>`;
+  host.innerHTML = svg;
+  const tip = document.createElement("div");
+  tip.className = "fd-tooltip"; tip.style.display = "none";
+  host.appendChild(tip);
+  host.querySelectorAll(`.fd-hit-${hostId}`).forEach(el => {
+    el.addEventListener("mouseenter", () => {
+      const i = +el.getAttribute("data-i"); const m = rows[i];
+      tip.innerHTML = `<div style="font-weight:600; margin-bottom:4px;">${labelFn(m)}</div>
+        <div class="fd-tooltip-row"><span>Revenue</span><span>&nbsp;${fmtCurrency(m.revenue)}</span></div>
+        <div class="fd-tooltip-row"><span>Expenses</span><span>&nbsp;${fmtExpense(m.expenses)}</span></div>
+        <div class="fd-tooltip-row"><span>Profit</span><span>&nbsp;${fmtProfit(m.profit)}</span></div>`;
+      tip.style.display = "block";
+      const rect = host.getBoundingClientRect();
+      tip.style.left = Math.min(x(i) + 12, rect.width - 160) + "px";
+      tip.style.top = Math.max(y(m.revenue) - 60, 0) + "px";
+    });
+    el.addEventListener("mouseleave", () => tip.style.display = "none");
+  });
+  if (tableId) {
+    const tableHost = document.getElementById(tableId);
+    let t = `<table class="fd-table"><thead><tr><th></th><th>Revenue</th><th>Expenses</th><th>Profit</th></tr></thead><tbody>`;
+    rows.forEach(m => { t += `<tr><td>${labelFn(m)}</td><td class="fd-num">${fmtCurrency(m.revenue)}</td><td class="fd-num">${fmtExpense(m.expenses)}</td><td class="fd-num">${fmtProfit(m.profit)}</td></tr>`; });
+    t += `</tbody></table>`;
+    tableHost.innerHTML = t;
+  }
+}
+
+function drawProfitChart(hostId, tableId, rows, labelFn) {
+  const host = document.getElementById(hostId);
+  if (!host || !rows.length) return;
+  const w = Math.max(host.clientWidth || 960, 320), h = 220;
+  const padL = 56, padR = 16, padT = 16, padB = 28;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const maxAbs = Math.max(1, ...rows.map(m => Math.abs(m.profit)));
+  const baseline = padT + plotH;
+  const slot = plotW / rows.length;
+  const bw = Math.min(24, slot - 6);
+  let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" style="overflow:visible;">`;
+  svg += `<line x1="${padL}" y1="${baseline}" x2="${w-padR}" y2="${baseline}" stroke="var(--baseline)" stroke-width="1"/>`;
+  rows.forEach((m, i) => {
+    const cx = padL + slot * i + slot/2;
+    const barH = Math.max(Math.abs(m.profit) * (plotH / maxAbs), m.profit !== 0 ? 2 : 1);
+    const yTop = baseline - barH;
+    const color = m.profit > 0 ? "var(--good)" : m.profit < 0 ? "var(--critical)" : "var(--baseline)";
+    svg += `<rect x="${cx - bw/2}" y="${yTop}" width="${bw}" height="${barH}" rx="3" fill="${color}"/>`;
+    const step = Math.ceil(rows.length / 7);
+    if (i % step === 0 || i === rows.length - 1) {
+      svg += `<text x="${cx}" y="${h-8}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${labelFn(m)}</text>`;
+    }
+    svg += `<rect data-i="${i}" x="${cx - slot/2}" y="${padT}" width="${slot}" height="${plotH}" fill="transparent" class="fd-phit-${hostId}"/>`;
+  });
+  svg += `</svg>`;
+  host.innerHTML = svg;
+  const tip = document.createElement("div");
+  tip.className = "fd-tooltip"; tip.style.display = "none";
+  host.appendChild(tip);
+  host.querySelectorAll(`.fd-phit-${hostId}`).forEach(el => {
+    el.addEventListener("mouseenter", () => {
+      const i = +el.getAttribute("data-i"); const m = rows[i];
+      tip.innerHTML = `<div style="font-weight:600;">${labelFn(m)}</div><div>${fmtProfit(m.profit)}</div>`;
+      tip.style.display = "block";
+      const rect = el.getBoundingClientRect(), hostRect = host.getBoundingClientRect();
+      tip.style.left = Math.min(rect.left - hostRect.left, hostRect.width - 140) + "px";
+      tip.style.top = "0px";
+    });
+    el.addEventListener("mouseleave", () => tip.style.display = "none");
+  });
+  if (tableId) {
+    const tableHost = document.getElementById(tableId);
+    let t = `<table class="fd-table"><thead><tr><th></th><th>Profit</th></tr></thead><tbody>`;
+    rows.forEach(m => { t += `<tr><td>${labelFn(m)}</td><td class="fd-num">${fmtProfit(m.profit)}</td></tr>`; });
+    t += `</tbody></table>`;
+    tableHost.innerHTML = t;
+  }
+}
+"""
 
 
 def fmt_currency_py(n):
@@ -270,6 +437,9 @@ if (sessionStorage.getItem("fd-unlocked") === "1") {{
 {SHARED_CSS}
 {gate_css}
 </style>
+<script>
+{CHART_JS}
+</script>
 {extra_head}
 </head>
 <body>
@@ -294,13 +464,19 @@ if (sessionStorage.getItem("fd-unlocked") === "1") {{
 
 
 def kpi_tiles_html(data):
-    mtd, ytd = data["mtd"], data["ytd"]
-    margin = (mtd["profit"] / mtd["revenue"] * 100) if mtd["revenue"] else 0.0
+    months = data["monthly"]
+    ytd = data["ytd"]
+    total_revenue = sum(m["revenue"] for m in months)
+    total_expenses = sum(m["expenses"] for m in months)
+    total_orders = sum(m["orders"] for m in months)
+    total_profit = total_revenue - total_expenses
+    margin = (total_profit / total_revenue * 100) if total_revenue else 0.0
+    span = f'{months[0]["month"]} to {months[-1]["month"]}' if months else ""
     tiles = [
-        ("Revenue (MTD)", fmt_currency_py(mtd["revenue"]), f'{mtd["orders"]} orders', None),
-        ("Expenses (MTD)", fmt_expense_py(mtd["expenses"]), "", None),
-        ("Profit (MTD)", fmt_profit_py(mtd["profit"]), "", None),
-        ("Margin (MTD)", f'{margin:.1f}%', f'YTD profit {fmt_profit_py(ytd["profit"])}', margin >= 0),
+        ("Revenue (Total)", fmt_currency_py(total_revenue), f'{total_orders} orders · {span}', None),
+        ("Expenses (Total)", fmt_expense_py(total_expenses), span, None),
+        ("Profit (Total)", fmt_profit_py(total_profit), span, None),
+        ("Margin (Total)", f'{margin:.1f}%', f'YTD profit {fmt_profit_py(ytd["profit"])}', margin >= 0),
         ("Open Accounts Payable", fmt_currency_py(data.get("total_ap", 0)), f'{sum(g["count"] for g in data.get("ap_groups", []))} items', data.get("total_ap", 0) == 0),
     ]
     html = '<div class="fd-kpis">'
@@ -392,136 +568,8 @@ def dashboard_body(data, editable=False):
 const DATA = {data_json};
 const EDITABLE = {"true" if editable else "false"};
 
-function fmtCurrency(n, compact) {{
-  const sign = n < 0 ? "-" : "";
-  const abs = Math.abs(n);
-  if (compact && abs >= 1000000) return sign + "$" + (abs/1000000).toFixed(1) + "M";
-  if (compact && abs >= 100000) return sign + "$" + (abs/1000).toFixed(0) + "K";
-  return sign + "$" + abs.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
-}}
-function fmtExpense(n, compact) {{
-  return `<span class="fd-down">-${{fmtCurrency(Math.abs(n), compact)}}</span>`;
-}}
-function fmtProfit(n, compact) {{
-  if (n > 0) return `<span class="fd-up">+${{fmtCurrency(n, compact)}}</span>`;
-  if (n < 0) return `<span class="fd-down">${{fmtCurrency(n, compact)}}</span>`;
-  return `<span style="color:var(--text-muted);">${{fmtCurrency(n, compact)}}</span>`;
-}}
-function fmtMonth(m) {{
-  const [y, mo] = m.split("-");
-  const d = new Date(parseInt(y), parseInt(mo)-1, 1);
-  return d.toLocaleDateString(undefined, {{month: "short", year: "2-digit"}});
-}}
-
-(function() {{
-  const host = document.getElementById("fd-trend-chart");
-  const w = Math.max(host.clientWidth || 960, 320), h = 260;
-  const padL = 56, padR = 16, padT = 16, padB = 28;
-  const plotW = w - padL - padR, plotH = h - padT - padB;
-  const months = DATA.monthly;
-  const allVals = months.flatMap(m => [m.revenue, m.expenses]);
-  const maxV = Math.max(1, ...allVals);
-  const x = i => padL + (i / (months.length - 1)) * plotW;
-  const y = v => padT + plotH - (v / maxV) * plotH;
-  const niceMax = (() => {{
-    const magnitude = Math.pow(10, Math.floor(Math.log10(maxV || 1)));
-    return Math.ceil(maxV / magnitude) * magnitude;
-  }})();
-  const ticks = 4;
-  let svg = `<svg viewBox="0 0 ${{w}} ${{h}}" width="100%" height="${{h}}" style="overflow:visible;">`;
-  for (let t = 0; t <= ticks; t++) {{
-    const v = niceMax * t / ticks;
-    const yy = y(v);
-    svg += `<line x1="${{padL}}" y1="${{yy}}" x2="${{w-padR}}" y2="${{yy}}" stroke="var(--grid)" stroke-width="1"/>`;
-    svg += `<text x="${{padL-8}}" y="${{yy+4}}" text-anchor="end" font-size="11" fill="var(--text-muted)">${{fmtCurrency(v, true)}}</text>`;
-  }}
-  const step = Math.ceil(months.length / 7);
-  months.forEach((m, i) => {{
-    if (i % step === 0 || i === months.length - 1) {{
-      svg += `<text x="${{x(i)}}" y="${{h-8}}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${{fmtMonth(m.month)}}</text>`;
-    }}
-  }});
-  function linePath(key) {{ return months.map((m, i) => `${{i===0?"M":"L"}} ${{x(i)}} ${{y(m[key])}}`).join(" "); }}
-  svg += `<path d="${{linePath("revenue")}}" fill="none" stroke="var(--series-revenue)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-  svg += `<path d="${{linePath("expenses")}}" fill="none" stroke="var(--series-expense)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-  const last = months.length - 1;
-  svg += `<circle cx="${{x(last)}}" cy="${{y(months[last].revenue)}}" r="4" fill="var(--series-revenue)" stroke="var(--surface-1)" stroke-width="2"/>`;
-  svg += `<circle cx="${{x(last)}}" cy="${{y(months[last].expenses)}}" r="4" fill="var(--series-expense)" stroke="var(--surface-1)" stroke-width="2"/>`;
-  svg += `<text x="${{x(last)+8}}" y="${{y(months[last].revenue)+4}}" font-size="11" fill="var(--series-revenue)" font-weight="600">${{fmtCurrency(months[last].revenue, true)}}</text>`;
-  svg += `<text x="${{x(last)+8}}" y="${{y(months[last].expenses)+4}}" font-size="11" fill="var(--series-expense)" font-weight="600">${{fmtCurrency(-months[last].expenses, true)}}</text>`;
-  months.forEach((m, i) => {{ svg += `<circle data-i="${{i}}" cx="${{x(i)}}" cy="${{y(m.revenue)}}" r="9" fill="transparent" class="fd-hit"/>`; }});
-  svg += `</svg>`;
-  host.innerHTML = svg;
-  const tip = document.createElement("div");
-  tip.className = "fd-tooltip"; tip.style.display = "none";
-  host.appendChild(tip);
-  host.querySelectorAll(".fd-hit").forEach(el => {{
-    el.addEventListener("mouseenter", () => {{
-      const i = +el.getAttribute("data-i"); const m = months[i];
-      tip.innerHTML = `<div style="font-weight:600; margin-bottom:4px;">${{fmtMonth(m.month)}}</div>
-        <div class="fd-tooltip-row"><span>Revenue</span><span>&nbsp;${{fmtCurrency(m.revenue)}}</span></div>
-        <div class="fd-tooltip-row"><span>Expenses</span><span>&nbsp;${{fmtExpense(m.expenses)}}</span></div>
-        <div class="fd-tooltip-row"><span>Profit</span><span>&nbsp;${{fmtProfit(m.profit)}}</span></div>`;
-      tip.style.display = "block";
-      const rect = host.getBoundingClientRect();
-      tip.style.left = Math.min(x(i) + 12, rect.width - 160) + "px";
-      tip.style.top = Math.max(y(m.revenue) - 60, 0) + "px";
-    }});
-    el.addEventListener("mouseleave", () => tip.style.display = "none");
-  }});
-  const tableHost = document.getElementById("trend-table");
-  let t = `<table class="fd-table"><thead><tr><th>Month</th><th>Revenue</th><th>Expenses</th><th>Profit</th></tr></thead><tbody>`;
-  months.forEach(m => {{ t += `<tr><td>${{fmtMonth(m.month)}}</td><td class="fd-num">${{fmtCurrency(m.revenue)}}</td><td class="fd-num">${{fmtExpense(m.expenses)}}</td><td class="fd-num">${{fmtProfit(m.profit)}}</td></tr>`; }});
-  t += `</tbody></table>`;
-  tableHost.innerHTML = t;
-}})();
-
-(function() {{
-  const host = document.getElementById("fd-profit-chart");
-  const w = Math.max(host.clientWidth || 960, 320), h = 220;
-  const padL = 56, padR = 16, padT = 16, padB = 28;
-  const plotW = w - padL - padR, plotH = h - padT - padB;
-  const months = DATA.monthly;
-  const maxAbs = Math.max(1, ...months.map(m => Math.abs(m.profit)));
-  const baseline = padT + plotH;
-  const slot = plotW / months.length;
-  const bw = Math.min(24, slot - 6);
-  let svg = `<svg viewBox="0 0 ${{w}} ${{h}}" width="100%" height="${{h}}" style="overflow:visible;">`;
-  svg += `<line x1="${{padL}}" y1="${{baseline}}" x2="${{w-padR}}" y2="${{baseline}}" stroke="var(--baseline)" stroke-width="1"/>`;
-  months.forEach((m, i) => {{
-    const cx = padL + slot * i + slot/2;
-    const barH = Math.max(Math.abs(m.profit) * (plotH / maxAbs), m.profit !== 0 ? 2 : 1);
-    const yTop = baseline - barH;
-    const color = m.profit > 0 ? "var(--good)" : m.profit < 0 ? "var(--critical)" : "var(--baseline)";
-    svg += `<rect x="${{cx - bw/2}}" y="${{yTop}}" width="${{bw}}" height="${{barH}}" rx="3" fill="${{color}}"/>`;
-    const step = Math.ceil(months.length / 7);
-    if (i % step === 0 || i === months.length - 1) {{
-      svg += `<text x="${{cx}}" y="${{h-8}}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${{fmtMonth(m.month)}}</text>`;
-    }}
-    svg += `<rect data-i="${{i}}" x="${{cx - slot/2}}" y="${{padT}}" width="${{slot}}" height="${{plotH}}" fill="transparent" class="fd-phit"/>`;
-  }});
-  svg += `</svg>`;
-  host.innerHTML = svg;
-  const tip = document.createElement("div");
-  tip.className = "fd-tooltip"; tip.style.display = "none";
-  host.appendChild(tip);
-  host.querySelectorAll(".fd-phit").forEach(el => {{
-    el.addEventListener("mouseenter", () => {{
-      const i = +el.getAttribute("data-i"); const m = months[i];
-      tip.innerHTML = `<div style="font-weight:600;">${{fmtMonth(m.month)}}</div><div>${{fmtProfit(m.profit)}}</div>`;
-      tip.style.display = "block";
-      const rect = el.getBoundingClientRect(), hostRect = host.getBoundingClientRect();
-      tip.style.left = Math.min(rect.left - hostRect.left, hostRect.width - 140) + "px";
-      tip.style.top = "0px";
-    }});
-    el.addEventListener("mouseleave", () => tip.style.display = "none");
-  }});
-  const tableHost = document.getElementById("profit-table");
-  let t = `<table class="fd-table"><thead><tr><th>Month</th><th>Profit</th></tr></thead><tbody>`;
-  months.forEach(m => {{ t += `<tr><td>${{fmtMonth(m.month)}}</td><td class="fd-num">${{fmtProfit(m.profit)}}</td></tr>`; }});
-  t += `</tbody></table>`;
-  tableHost.innerHTML = t;
-}})();
+drawTrendChart("fd-trend-chart", "trend-table", DATA.monthly, m => fmtMonth(m.month));
+drawProfitChart("fd-profit-chart", "profit-table", DATA.monthly, m => fmtMonth(m.month));
 
 (function() {{
   const host = document.getElementById("fd-cat-chart");
@@ -555,29 +603,50 @@ function fmtMonth(m) {{
   }});
   host.innerHTML = html;
 }})();
-
-document.querySelectorAll(".fd-toggle").forEach(btn => {{
-  btn.addEventListener("click", () => {{
-    const id = btn.getAttribute("data-toggle");
-    const el = document.getElementById(id);
-    const chartHost = el.previousElementSibling;
-    el.classList.toggle("fd-hidden");
-    chartHost.classList.toggle("fd-hidden");
-    btn.textContent = el.classList.contains("fd-hidden") ? "View data" : "View chart";
-  }});
-}});
 </script>
 """
 
 
 def monthly_body(data):
-    rows = data["monthly"][-6:] + data["monthly_forecast"]
+    actual_rows = data["monthly"][-6:]
+    forecast_rows = data["monthly_forecast"]
+    all_rows = actual_rows + forecast_rows
+
     trs = ""
-    for r in data["monthly"][-6:]:
+    for i, r in enumerate(actual_rows):
         trs += f'<tr><td>{r["month"]}</td><td>Actual</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_expense_py(r["expenses"])}</td><td class="fd-num">{fmt_profit_py(r["profit"])}</td></tr>'
-    for r in data["monthly_forecast"]:
+    for r in forecast_rows:
         trs += f'<tr class="fd-forecast"><td>{r["month"]}</td><td>Forecast</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_expense_py(r["expenses"])}</td><td class="fd-num">{fmt_profit_py(r["profit"])}</td></tr>'
+
+    filter_options = '<option value="__all__">All actual months (total)</option>' + "".join(
+        f'<option value="{i}">{r["month"]}{" (forecast)" if not r.get("actual", True) else ""}</option>'
+        for i, r in enumerate(all_rows)
+    )
+
     return f"""
+    <div class="fd-kpis" id="monthly-kpis"></div>
+
+    <div class="fd-card">
+      <div class="fd-card-head">
+        <h2 class="fd-card-title">Revenue vs. expenses</h2>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+          <select id="monthly-filter" class="fd-filter-select">{filter_options}</select>
+          <button class="fd-toggle" data-toggle="monthly-trend-table">View data</button>
+        </div>
+      </div>
+      <div id="monthly-trend-chart" style="position:relative;"></div>
+      <div id="monthly-trend-table" class="fd-hidden"></div>
+    </div>
+
+    <div class="fd-card">
+      <div class="fd-card-head">
+        <h2 class="fd-card-title">Monthly profit</h2>
+        <button class="fd-toggle" data-toggle="monthly-profit-table">View data</button>
+      </div>
+      <div id="monthly-profit-chart" style="position:relative;"></div>
+      <div id="monthly-profit-table" class="fd-hidden"></div>
+    </div>
+
     <div class="fd-card">
       <div class="fd-card-head"><h2 class="fd-card-title">Monthly P&L — actuals + 6-month forecast</h2></div>
       <div class="fd-footnote" style="margin-bottom:10px;">Forecast = trailing 3-month average, flat (0% assumed growth).</div>
@@ -586,14 +655,76 @@ def monthly_body(data):
         <tbody>{trs}</tbody>
       </table>
     </div>
+
+<script>
+const MONTHLY_ROWS = {json.dumps(all_rows)};
+const MONTHLY_ACTUAL_COUNT = {len(actual_rows)};
+
+drawTrendChart("monthly-trend-chart", "monthly-trend-table", MONTHLY_ROWS, m => fmtMonth(m.month));
+drawProfitChart("monthly-profit-chart", "monthly-profit-table", MONTHLY_ROWS, m => fmtMonth(m.month));
+
+function updateMonthlyKpis(selection) {{
+  let rows, label;
+  if (selection === "__all__") {{
+    rows = MONTHLY_ROWS.slice(0, MONTHLY_ACTUAL_COUNT);
+    label = rows.length ? `${{fmtMonth(rows[0].month)}} – ${{fmtMonth(rows[rows.length-1].month)}}` : "";
+  }} else {{
+    rows = [MONTHLY_ROWS[+selection]];
+    label = rows[0].actual === false ? "Forecast" : "Actual";
+  }}
+  const revenue = rows.reduce((s,r) => s+r.revenue, 0);
+  const expenses = rows.reduce((s,r) => s+r.expenses, 0);
+  const orders = rows.reduce((s,r) => s+(r.orders||0), 0);
+  const profit = revenue - expenses;
+  const margin = revenue ? (profit/revenue*100) : 0;
+  renderKpiTiles("monthly-kpis", [
+    {{label: "Revenue", value: fmtCurrency(revenue), sub: `${{orders}} orders · ${{label}}`}},
+    {{label: "Expenses", value: fmtExpense(expenses), sub: label}},
+    {{label: "Profit", value: fmtProfit(profit), sub: label}},
+    {{label: "Margin", value: margin.toFixed(1) + "%", sub: label}},
+  ]);
+}}
+
+document.getElementById("monthly-filter").addEventListener("change", (e) => updateMonthlyKpis(e.target.value));
+updateMonthlyKpis("__all__");
+</script>
     """
 
 
 def annual_body(data):
+    rows = data["annual"]
     trs = ""
-    for r in data["annual"]:
+    for r in rows:
         trs += f'<tr><td>{r["year"]}</td><td>{r["label"]}</td><td class="fd-num">{fmt_currency_py(r["revenue"])}</td><td class="fd-num">{fmt_expense_py(r["expenses"])}</td><td class="fd-num">{fmt_profit_py(r["profit"])}</td></tr>'
+
+    filter_options = '<option value="__all__">All years (total)</option>' + "".join(
+        f'<option value="{i}">{r["year"]}</option>' for i, r in enumerate(rows)
+    )
+
     return f"""
+    <div class="fd-kpis" id="annual-kpis"></div>
+
+    <div class="fd-card">
+      <div class="fd-card-head">
+        <h2 class="fd-card-title">Revenue vs. expenses by year</h2>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+          <select id="annual-filter" class="fd-filter-select">{filter_options}</select>
+          <button class="fd-toggle" data-toggle="annual-trend-table">View data</button>
+        </div>
+      </div>
+      <div id="annual-trend-chart" style="position:relative;"></div>
+      <div id="annual-trend-table" class="fd-hidden"></div>
+    </div>
+
+    <div class="fd-card">
+      <div class="fd-card-head">
+        <h2 class="fd-card-title">Profit by year</h2>
+        <button class="fd-toggle" data-toggle="annual-profit-table">View data</button>
+      </div>
+      <div id="annual-profit-chart" style="position:relative;"></div>
+      <div id="annual-profit-table" class="fd-hidden"></div>
+    </div>
+
     <div class="fd-card">
       <div class="fd-card-head"><h2 class="fd-card-title">Annual P&L</h2></div>
       <table class="fd-table">
@@ -601,6 +732,37 @@ def annual_body(data):
         <tbody>{trs}</tbody>
       </table>
     </div>
+
+<script>
+const ANNUAL_ROWS = {json.dumps(rows)};
+
+drawTrendChart("annual-trend-chart", "annual-trend-table", ANNUAL_ROWS, r => String(r.year));
+drawProfitChart("annual-profit-chart", "annual-profit-table", ANNUAL_ROWS, r => String(r.year));
+
+function updateAnnualKpis(selection) {{
+  let rows, label;
+  if (selection === "__all__") {{
+    rows = ANNUAL_ROWS;
+    label = rows.length ? `${{rows[0].year}} – ${{rows[rows.length-1].year}}` : "";
+  }} else {{
+    rows = [ANNUAL_ROWS[+selection]];
+    label = rows[0].label;
+  }}
+  const revenue = rows.reduce((s,r) => s+r.revenue, 0);
+  const expenses = rows.reduce((s,r) => s+r.expenses, 0);
+  const profit = revenue - expenses;
+  const margin = revenue ? (profit/revenue*100) : 0;
+  renderKpiTiles("annual-kpis", [
+    {{label: "Revenue", value: fmtCurrency(revenue), sub: label}},
+    {{label: "Expenses", value: fmtExpense(expenses), sub: label}},
+    {{label: "Profit", value: fmtProfit(profit), sub: label}},
+    {{label: "Margin", value: margin.toFixed(1) + "%", sub: label}},
+  ]);
+}}
+
+document.getElementById("annual-filter").addEventListener("change", (e) => updateAnnualKpis(e.target.value));
+updateAnnualKpis("__all__");
+</script>
     """
 
 
